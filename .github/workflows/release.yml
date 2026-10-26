@@ -132,7 +132,7 @@ jobs:
         if: runner.os == 'Linux' && !contains(github.ref_name, '-')
         run: |
           sudo apt-get install -y --no-install-recommends libarchive-tools squashfs-tools zsync
-          gem install native-packages --version 0.10.0 --no-document
+          gem install native-packages --version 0.11.0 --no-document
           case "${{ matrix.target }}" in
             x86_64-unknown-linux-gnu) id=appimage-amd64 ;;
             aarch64-unknown-linux-gnu) id=appimage-arm64 ;;
@@ -166,6 +166,11 @@ jobs:
     # only this environment, which deploys only from v* tags (PACKAGING.md,
     # "Windows signing").
     environment: windows-signing
+    # The Artifact Signing account native-packages signs with.
+    env:
+      AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
     strategy:
       fail-fast: false
       matrix:
@@ -184,9 +189,14 @@ jobs:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release
 
-      # Signed before anything packs it, so the zip, the setup program and the
-      # MSI all carry a signed binary. Signing starts once the windows-signing
-      # environment names a certificate profile.
+      # native-packages signs the Windows code (native-packages.yaml,
+      # windows.signing) through the Azure CLI sign-in below, once the
+      # windows-signing environment names a certificate profile.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      - name: Install native-packages
+        run: gem install native-packages --version 0.11.0 --no-document
       - name: Sign in to Azure for code signing
         if: vars.AZURE_SIGNING_PROFILE != ''
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
@@ -194,29 +204,12 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Sign the binary (Azure Artifact Signing)
+      # Signed before anything packs it, so the zip, the setup program and the
+      # MSI all carry a signed binary.
+      - name: Sign the binary
         if: vars.AZURE_SIGNING_PROFILE != ''
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files: |
-            ${{ github.workspace }}\target\${{ matrix.target }}\release\spotifast.exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: Spotifast
-          description-url: https://github.com/crmne/spotifast
-          # Only the Azure CLI sign-in above: no secrets, no other identity.
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
+        shell: pwsh
+        run: native-packages sign-windows target\${{ matrix.target }}\release\spotifast.exe
 
       - name: Package
         shell: bash
@@ -247,21 +240,17 @@ jobs:
       # program, and their next update moves them to the package (PACKAGING.md).
       # build-msi.py compiles its custom actions with the MSVC tools for the
       # package's architecture.
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '4.0'
       - name: MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc-arch }}
+      # native-packages signs the MSI before recording its checksum.
       - name: Windows Installer package
         shell: pwsh
         run: |
           dotnet tool install wix --version 5.0.2 --tool-path "$env:RUNNER_TEMP\wix"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:PATH = "$env:RUNNER_TEMP\wix;$env:PATH"
-          gem install native-packages --version 0.10.0 --no-document
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = $env:GITHUB_REF_NAME.TrimStart("v")
           $payload = "dist\msi-input-${{ matrix.target }}"
           New-Item -ItemType Directory -Force $payload | Out-Null
@@ -272,41 +261,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item "$packages\packages\${{ matrix.package-target }}\msi\*.msi" dist\
 
-      - name: Sign installers (Azure Artifact Signing)
-        if: vars.AZURE_SIGNING_PROFILE != ''
-        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\dist
-          files-folder-filter: exe,msi
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: Spotifast
-          description-url: https://github.com/crmne/spotifast
-          # Only the Azure CLI sign-in above: no secrets, no other identity.
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-      - name: Check the signatures
+      - name: Sign the setup program
         if: vars.AZURE_SIGNING_PROFILE != ''
         shell: pwsh
-        run: |
-          $files = @("target\${{ matrix.target }}\release\spotifast.exe") + (Get-ChildItem dist\*-setup.exe, dist\*.msi).FullName
-          foreach ($file in $files) {
-            $signature = Get-AuthenticodeSignature $file
-            if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
-              throw "$file is not validly signed and timestamped: $($signature.Status) $($signature.StatusMessage)"
-            }
-            "$file signed by $($signature.SignerCertificate.Subject)"
-          }
+        run: native-packages sign-windows (Get-ChildItem dist\*-setup.exe).FullName
 
       # Replaces the binary the build job handed over with the packages.
       - uses: actions/upload-artifact@v7
@@ -354,7 +312,7 @@ jobs:
         with:
           ruby-version: '4.0'
       - name: Install native packaging
-        run: gem install native-packages --version 0.10.0 --no-document
+        run: gem install native-packages --version 0.11.0 --no-document
 
       - name: App bundle
         run: |
@@ -445,7 +403,7 @@ jobs:
         env:
           SPOTIFAST_UPDATE_SIGNING_KEY: ${{ secrets.SPOTIFAST_UPDATE_SIGNING_KEY }}
         run: |
-          gem install native-packages --version 0.10.0 --no-document
+          gem install native-packages --version 0.11.0 --no-document
           native-packages sign-checksums dist/checksums.txt \
             --public-key assets/update-public-key.hex \
             --key-env SPOTIFAST_UPDATE_SIGNING_KEY

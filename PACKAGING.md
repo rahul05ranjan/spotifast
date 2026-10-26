@@ -30,7 +30,7 @@ Linux desktop assets beside its binaries and packages the signed macOS
 desktop hooks.
 
 ```sh
-gem install native-packages --version 0.10.0
+gem install native-packages --version 0.11.0
 native-packages validate
 native-packages doctor --target linux-amd64 --target linux-arm64
 native-packages build --release v1.2.3 --target linux-amd64 --target linux-arm64
@@ -103,7 +103,7 @@ Homebrew automation needs `PUBLISH_HOMEBREW=true` and
 The macOS and Windows targets and the Flatpak build step remain responsible
 for their native artifacts. Additional nFPM formats require suitable platform
 inputs and dependencies; adding a format does not port the application.
-See the [shared CLI documentation](https://github.com/crmne/native-packages/tree/v0.10.0)
+See the [shared CLI documentation](https://github.com/crmne/native-packages/tree/v0.11.0)
 for commands and supported formats.
 
 The manual **Flatpak from release** workflow can rebuild a missing Flatpak from
@@ -144,7 +144,7 @@ secrets, which the job exposes as environment variables:
 A complete set enables notarization automatically. An incomplete set fails;
 no values retain local builds without Developer ID signing. Application inputs
 and the user's normal keychains remain unchanged. See the shared
-[Apple setup and phase contract](https://github.com/crmne/native-packages/blob/v0.10.0/docs/apple-notarization.md).
+[Apple setup and phase contract](https://github.com/crmne/native-packages/blob/v0.11.0/docs/apple-notarization.md).
 
 After preparing `dist/macos-input` on a Mac, test packaging without publishing:
 
@@ -158,12 +158,19 @@ their original signatures; this setup does not replace release assets.
 
 ## Windows signing
 
-Tag releases sign `spotifast.exe`, the setup program and the MSI with Azure Artifact Signing, as
-**PlentyLabs UG (haftungsbeschränkt) & Co. KG**: SHA-256 Authenticode with
-Microsoft's RFC 3161 timestamp, and a check that every signed file is `Valid`
-before it is uploaded. The account, `plentylabs` in West Europe,
-is shared by Carmine's Windows apps and managed in `crmne/terraform`
-(`azure/signing.tf`, its README's "Code signing").
+Tag releases sign `spotifast.exe`, the setup program and the MSI with Azure
+Artifact Signing, as **PlentyLabs UG (haftungsbeschränkt) & Co. KG**, through
+native-packages: `windows.signing` in `native-packages.yaml` turns it on,
+`native-packages sign-windows` signs `spotifast.exe` before the zip, the setup
+program and the MSI pack it, and the setup program once Inno has built it, and
+`native-packages build` signs the MSI before recording its checksum. Each
+signature is SHA-256 Authenticode with Microsoft's RFC 3161 timestamp,
+checked to be `Valid` and PlentyLabs' before anything is uploaded (see
+native-packages'
+[Windows code signing](https://github.com/crmne/native-packages/blob/v0.11.0/docs/_guides/windows-signing.md)).
+The account, `plentylabs` in West Europe, is shared by Carmine's Windows apps
+and managed in `crmne/terraform` (`azure/signing.tf`, its README's "Code
+signing").
 
 Azure Artifact Signing doesn't run on Arm runners, so the arm64 binary is
 built, checked and started on `windows-11-arm` as before, then handed to the
@@ -181,8 +188,9 @@ environment's variables, none of them secret, are `AZURE_CLIENT_ID`,
 
 `AZURE_SIGNING_PROFILE` names the Public Trust certificate profile
 `plentylabs`, created once PlentyLabs' identity validation completed
-(2026-10-26), so every tag release signs. Without that variable releases build
-unsigned, as before.
+(2026-10-26), so every tag release signs. Without the environment's signing
+variables releases build unsigned; with only some of them, the Windows build
+fails rather than ship unsigned.
 
 A signature doesn't silence SmartScreen at once: reputation builds as people
 download releases signed by the same publisher, so keep signing every release
