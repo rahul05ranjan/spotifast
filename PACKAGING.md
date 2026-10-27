@@ -165,8 +165,8 @@ native-packages: `windows.signing` in `native-packages.yaml` turns it on,
 program and the MSI pack it, and the setup program once Inno has built it, and
 `native-packages build` signs the MSI before recording its checksum. Each
 signature is SHA-256 Authenticode with Microsoft's RFC 3161 timestamp,
-checked to be `Valid` and PlentyLabs' before anything is uploaded (see
-native-packages'
+checked to be `Valid` and PlentyLabs' before the Windows job uploads the
+release's Windows downloads (see native-packages'
 [Windows code signing](https://github.com/crmne/native-packages/blob/v0.11.0/docs/_guides/windows-signing.md)).
 The account, `plentylabs` in West Europe, is shared by Carmine's Windows apps
 and managed in `crmne/terraform` (`azure/signing.tf`, its README's "Code
